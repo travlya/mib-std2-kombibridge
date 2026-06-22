@@ -110,11 +110,25 @@ ExboxServiceListener {
         }
     }
 
-    // The cluster's CurrentStationInfo BAPString lines hold up to 73 chars; clamp our injected text
-    // so an over-long title/street can never overflow the serializer and blank the widget. Null -> "".
+    // Clamp our injected text to 72 chars so an over-long title/street can never overflow the
+    // CurrentStationInfo BAPString serializer and blank the widget. Null -> "".
     private static String clampLine(String s) {
         if (s == null) return "";
         return s.length() > 72 ? s.substring(0, 72) : s;
+    }
+
+    // The cluster's Q4 slot shows ~24 chars. Scroll a longer now-playing title as a marquee, advanced
+    // by the nav poll timer (AANavReader) via marqueeTick. Short titles are returned unchanged so there
+    // is no scrolling and no extra BAP traffic for them.
+    public static final int Q4_WIDTH = 24;
+    public static volatile int marqueeTick = 0;
+    private static String marqueeQ4(String s) {
+        if (s == null) return "";
+        if (s.length() <= Q4_WIDTH) return s;
+        String ring = s + "   -   ";              // gap so the wrap point is visible
+        int len = ring.length();
+        int off = ((marqueeTick % len) + len) % len;
+        return (ring + ring).substring(off, off + Q4_WIDTH);
     }
 
     static {
@@ -414,7 +428,8 @@ ExboxServiceListener {
                     && de.vw.mib.asl.internal.androidauto.target.NavigationHandler.aaRouteGuidanceActive
                     && navPrimary != null && navPrimary.length() > 0) {
                 // Cluster renders top->bottom: secondary(S2), tertiary(T3), PRIMARY(P1,big), quaternary(Q4).
-                //   P1 = arrow + distance ("► 300 m") ; S2 = street ; T3 = maneuver word ; Q4 = exit #.
+                //   P1 = arrow + distance ("► 300 m") ; S2 = street ; T3 = maneuver word ;
+                //   Q4 = exit # or, when there's none, the now-playing title (see below).
                 // (*_Type don't drive font/icons here — positional; the big font is the PRIMARY slot.)
                 string = clampLine(navPrimary);
                 // pi_Type=0 (like the PROBE_LAYOUT, which DID render all four lines incl. Q4).
@@ -425,9 +440,16 @@ ExboxServiceListener {
                 currentStationInfo_Status.si_Type = 0;
                 currentStationInfo_Status.tertiaryInformation.setContent(clampLine(navTertiary));
                 currentStationInfo_Status.ti_Type = 0;
-                currentStationInfo_Status.quaternaryInformation.setContent(clampLine(navQuaternary));
+                // Q4: roundabout exit number (navQuaternary) takes priority; otherwise surface the
+                // now-playing track title so music stays visible during route guidance. The nav layout
+                // is pi_Type=0 (4-line) so Q4 renders, and this is recomputed on every media/nav update
+                // so the title follows song changes. mediaTitle is null when the track feature is off.
+                String navQ4 = (navQuaternary != null && navQuaternary.length() > 0)
+                        ? navQuaternary
+                        : marqueeQ4(mediaTitle);
+                currentStationInfo_Status.quaternaryInformation.setContent(clampLine(navQ4));
                 currentStationInfo_Status.qi_Type = 0;
-                MIBLogger.getInstance().debug("CurrentStationInfo: nav-in-media p='" + navPrimary + "' s='" + navSecondary + "' t='" + navTertiary + "'");
+                MIBLogger.getInstance().debug("CurrentStationInfo: nav-in-media p='" + navPrimary + "' s='" + navSecondary + "' t='" + navTertiary + "' q4='" + navQ4 + "'");
             }
             // otherwise (AA connected, no active route guidance) show the REAL now-playing track.
             else if (MEDIA_ENABLED && connType == 3 && mediaTitle != null && mediaTitle.length() > 0) {
